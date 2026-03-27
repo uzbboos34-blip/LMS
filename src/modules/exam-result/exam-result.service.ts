@@ -1,94 +1,104 @@
 import { ForbiddenException, Injectable, NotFoundException } from "@nestjs/common";
 import { UserRole } from "@prisma/client";
 import { PrismaService } from "src/core/database/prisma.service";
-import { CreateExamResultDto } from "./dto/create-exam-result.dto";
 
 @Injectable()
 export class ExamResultService {
   constructor(private prisma: PrismaService) { }
 
-  async create(payload: CreateExamResultDto, currentUser: { id: number, role: UserRole }) {
-    const section = await this.prisma.sectionLesson.findUnique({
-      where: { id: payload.section_id },
-      include: { course: true }
+  async getMyResult(section_id: number, currentUser) {
+    const totalExams = await this.prisma.exam.count({
+      where: { section_id }
     });
 
-    if (!section) throw new NotFoundException("Section not found");
-
-    if (
-      currentUser.role !== UserRole.ADMIN &&
-      section.course.mentor_id !== currentUser.id
-    ) {
-      throw new ForbiddenException("You don't have access to this course");
-    }
-
-    if (section.course.published === false) {
-      throw new ForbiddenException("This course is not published yet");
-    }
-
-    const passed = (payload.corrects / (payload.corrects + payload.wrongs)) * 100 >= 60;
-
-    return this.prisma.examResult.upsert({
+    const answeredCount = await this.prisma.studentExamQuestion.count({
       where: {
-        user_id_section_id: { user_id: payload.user_id, section_id: payload.section_id }
+        section_id,
+        user_id: currentUser.id
+      }
+    });
+
+    if (answeredCount !== totalExams) {
+      throw new ForbiddenException("Savollarga to'liq javob berilmagan");
+    }
+    return this.prisma.examResult.findUnique({
+      where: {
+        user_id_section_id: {
+          user_id: currentUser.id,
+          section_id
+        }
       },
-      update: {
-        corrects: payload.corrects,
-        wrongs: payload.wrongs,
-        passed: payload.passed
-      },
-      create: {
-        user_id: payload.user_id,
-        section_id: payload.section_id,
-        corrects: payload.corrects,
-        wrongs: payload.wrongs,
-        passed
+      select: {
+        corrects: true,
+        wrongs: true,
+        passed: true
       }
     });
   }
-  async findAll(section_id: number, currentUser) {
+
+  async getAllResults(section_id: number, currentUser) {
+
     const section = await this.prisma.sectionLesson.findUnique({
       where: { id: section_id },
-      include: { course: { include: { assignedCourses: true, purchasedCourses: true } } }
-    });
-
-    if (!section) throw new NotFoundException("Section not found");
-
-    if (section.course.purchasedCourses.some(p => p.user_id === currentUser.id)) {
-      return this.prisma.examResult.findMany({
-        where: { section_id, user_id: currentUser.id },
-        select: {
-          id: true,
-          corrects: true,
-          wrongs: true,
-          passed: true
-        }
-      })
-    }
-
-    const courses = section.course;
-    if (
-      currentUser.role !== UserRole.ADMIN &&
-      courses.mentor_id !== currentUser.id &&
-      !courses.assignedCourses.some(a => a.user_id === currentUser.id && !a.isDeleted)
-    ) {
-      throw new ForbiddenException("You cannot view these results");
-    } 
-
-    return this.prisma.examResult.findMany({
-      where: { section_id },
-      select: {
-        id: true,
-        corrects: true,
-        wrongs: true,
-        passed: true,
-        user: {
-          select: {
-            id: true,
-            fullName: true
-          }
+      include: {
+        course: {
+          include: { assignedCourses: true }
         }
       }
     });
+
+    if (!section) throw new NotFoundException();
+
+    const course = section.course;
+
+    const isAdmin = currentUser.role === UserRole.ADMIN;
+    const isMentor = course.mentor_id === currentUser.id;
+    const isAssistant = course.assignedCourses.some(
+      a => a.user_id === currentUser.id && !a.isDeleted
+    );
+
+    if (!isAdmin && !isMentor && !isAssistant) {
+      throw new ForbiddenException();
+    }
+
+    const totalExams = await this.prisma.exam.count({
+      where: { section_id }
+    });
+
+    const results = await this.prisma.examResult.findMany({
+      where: { section_id },
+      include: {
+        user: true
+      }
+    });
+
+    const final: {
+      user: {
+        id: number;
+        fullName: string;
+      };
+      corrects: number;
+      wrongs: number;
+      passed: boolean;
+    }[] = [];
+
+    for (const r of results) {
+      const answeredCount = await this.prisma.studentExamQuestion.count({
+        where: {
+          section_id,
+          user_id: r.user_id
+        }
+      });
+
+      if (answeredCount === totalExams) {
+        final.push({
+          user: { id: r.user.id, fullName: r.user.fullName },
+          corrects: r.corrects,
+          wrongs: r.wrongs,
+          passed: r.passed
+        });
+      }
+    }
+    return final;
   }
 }

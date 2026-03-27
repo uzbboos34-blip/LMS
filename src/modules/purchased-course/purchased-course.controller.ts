@@ -22,8 +22,8 @@ export class PurchasedCourseController {
   }
   
   @UseGuards(AuthGuard, RoleGuard)
-  @ApiOperation({ summary: `${UserRole.MENTOR}, ${UserRole.ASSISTANT}, ${UserRole.STUDENT} ` })
-  @Roles(UserRole.MENTOR, UserRole.ASSISTANT, UserRole.STUDENT)
+  @ApiOperation({ summary: ` ${UserRole.ADMIN},${UserRole.MENTOR}, ${UserRole.ASSISTANT}, ${UserRole.STUDENT} ` })
+  @Roles(UserRole.MENTOR, UserRole.ASSISTANT, UserRole.STUDENT, UserRole.ADMIN)
   @Get()
   findAll(@Req() req: Request) {
     return this.purchasedCourseService.findAll(req['user']);

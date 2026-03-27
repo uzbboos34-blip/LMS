@@ -7,7 +7,26 @@ import { ExamAnswer, UserRole } from '@prisma/client';
 @Injectable()
 export class StudentExamQuestionService {
   constructor(private readonly prisma: PrismaService) { }
-  async create(section_id: number,payload: CreateStudentExamQuestionDto, currentUser: { id: number }) {
+  
+  async calculateAndSaveResult(section_id: number, user_id: number) {
+    const exams = await this.prisma.exam.findMany({ where: { section_id } });
+    const totalExams = exams.length;
+
+    const answers = await this.prisma.studentExamQuestion.findMany({
+      where: { section_id, user_id }
+    });
+
+    const corrects = answers.filter(a => a.isCorrect).length;
+    const wrongs = totalExams - corrects;
+    const passed = totalExams === 0 ? false : (corrects / totalExams) * 100 >= 60;
+
+    return this.prisma.examResult.upsert({
+      where: { user_id_section_id: { user_id, section_id } },
+      update: { corrects, wrongs, passed },
+      create: { user_id, section_id, corrects, wrongs, passed }
+    });
+  }
+  async create(section_id: number, payload: CreateStudentExamQuestionDto, currentUser: { id: number }) {
 
     const existing = await this.prisma.studentExamQuestion.findUnique({
       where: { user_id_exam_id: { user_id: currentUser.id, exam_id: payload.exam_id } }
@@ -65,6 +84,8 @@ export class StudentExamQuestionService {
 
     const isCorrect = exam.answer === payload.answer;
 
+
+
     const created = await this.prisma.studentExamQuestion.create({
       data: {
         exam_id: exam.id,
@@ -74,6 +95,15 @@ export class StudentExamQuestionService {
         section_id
       }
     });
+
+    const totalExams = await this.prisma.exam.count({ where: { section_id } });
+    const answeredCount = await this.prisma.studentExamQuestion.count({
+      where: { section_id, user_id: currentUser.id }
+    });
+
+    if (answeredCount === totalExams) {
+      await this.calculateAndSaveResult(section_id, currentUser.id);
+    }
 
     return {
       success: true,
